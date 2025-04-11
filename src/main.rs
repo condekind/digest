@@ -39,6 +39,18 @@ struct Cli {
     /// List files that would be included without generating the digest
     #[clap(short, long)]
     list: bool,
+
+    /// Disable using .gitignore for ignore patterns
+    #[clap(long)]
+    no_gitignore: bool,
+
+    /// Disable using .digestignore for ignore patterns
+    #[clap(long)]
+    no_digestignore: bool,
+
+    /// Disable all ignore patterns (both .gitignore and .digestignore)
+    #[clap(long)]
+    no_ignore: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -82,9 +94,64 @@ fn main() -> Result<()> {
     debug!("Main language detected: {:?}", main_language);
     debug!("Language breakdown: {:?}", language_breakdown);
 
-    // Step 2: Build ignore patterns based on the main language and check for .digestignore
-    let ignore_patterns = check_for_digestignore(&project_path)
-        .unwrap_or_else(|_| build_ignore_patterns(&main_language, is_godot_project));
+    // Step 2: Get ignore patterns from .digestignore, .gitignore, or defaults
+    let mut ignore_patterns = HashSet::new();
+    
+    // Don't process any ignore files if --no-ignore is used
+    if !cli.no_ignore {
+        // Try to get patterns from .digestignore, unless --no-digestignore is used
+        let using_digestignore = if !cli.no_digestignore {
+            match check_for_digestignore(&project_path) {
+                Ok(digestignore_patterns) => {
+                    ignore_patterns.extend(digestignore_patterns);
+                    true
+                },
+                Err(_) => {
+                    debug!("No .digestignore file found.");
+                    false
+                }
+            }
+        } else {
+            debug!("Skipping .digestignore due to --no-digestignore flag.");
+            false
+        };
+        
+        // Try to get patterns from .gitignore, unless --no-gitignore is used
+        let using_gitignore = if !cli.no_gitignore {
+            match check_for_gitignore(&project_path) {
+                Ok(gitignore_patterns) => {
+                    ignore_patterns.extend(gitignore_patterns);
+                    true
+                },
+                Err(_) => {
+                    debug!("No .gitignore file found.");
+                    false
+                }
+            }
+        } else {
+            debug!("Skipping .gitignore due to --no-gitignore flag.");
+            false
+        };
+        
+        // If no ignore files were found or used, use default patterns
+        if ignore_patterns.is_empty() {
+            info!("No ignore files found or used. Using default ignore patterns.");
+            ignore_patterns = build_ignore_patterns(&main_language, is_godot_project);
+        } else {
+            let mut ignore_sources = Vec::new();
+            if using_digestignore {
+                ignore_sources.push(".digestignore");
+            }
+            if using_gitignore {
+                ignore_sources.push(".gitignore");
+            }
+            info!("Using ignore patterns from: {}", ignore_sources.join(", "));
+        }
+    } else {
+        info!("Ignoring all ignore files due to --no-ignore flag.");
+        // Always ignore .git directory at minimum
+        ignore_patterns.insert(".git".to_string());
+    }
 
     // Step 3: Collect relevant files
     let files = collect_relevant_files(
@@ -93,6 +160,7 @@ fn main() -> Result<()> {
         cli.max_files,
         cli.max_file_size * 1024, // Convert KB to bytes
         is_godot_project,
+        !cli.no_gitignore && !cli.no_ignore, // Respect gitignore unless disabled
     )?;
 
     info!("Found {} relevant files", files.len());
@@ -250,6 +318,33 @@ fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
     Ok(patterns)
 }
 
+fn check_for_gitignore(project_path: &Path) -> Result<HashSet<String>> {
+    let gitignore_path = project_path.join(".gitignore");
+
+    if !gitignore_path.exists() {
+        return Err(anyhow::anyhow!("No .gitignore file found"));
+    }
+
+    info!("Using .gitignore file at {}", gitignore_path.display());
+
+    // Read the .gitignore file
+    let content = fs::read_to_string(&gitignore_path)
+        .with_context(|| format!("Failed to read .gitignore at {}", gitignore_path.display()))?;
+
+    // Add .git to always ignore
+    let mut patterns = HashSet::from([".git".to_string()]);
+
+    for line in content.lines() {
+        let line = line.trim();
+        // Skip empty lines and comments
+        if !line.is_empty() && !line.starts_with('#') {
+            patterns.insert(line.to_string());
+        }
+    }
+
+    Ok(patterns)
+}
+
 fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
     // Get the path as a string
     let path_str = path.to_string_lossy();
@@ -316,14 +411,19 @@ fn collect_relevant_files(
     max_files: usize,
     max_file_size: u64,
     is_godot_project: bool,
+    respect_gitignore: bool,
 ) -> Result<Vec<FileInfo>> {
     let mut files = Vec::new();
 
-    // Use the ignore crate to respect .gitignore files
-    let walker = WalkBuilder::new(project_path)
+    // Configure the walker with appropriate gitignore settings
+    let mut builder = WalkBuilder::new(project_path);
+    builder
         .hidden(false)  // Include hidden files
-        .git_ignore(true)  // Respect .gitignore
-        .build();
+        .git_ignore(respect_gitignore)  // Respect .gitignore based on CLI option
+        .git_global(respect_gitignore)  // Also control global gitignore
+        .git_exclude(respect_gitignore); // And git exclude rules
+    
+    let walker = builder.build();
 
     for result in walker {
         let entry = match result {
@@ -559,11 +659,13 @@ fn is_godot_project(project_path: &Path) -> bool {
     }
 
     // Look for .tscn or .gd files in the project
-    let walker = WalkBuilder::new(project_path)
+    let mut builder = WalkBuilder::new(project_path);
+    builder
         .hidden(false)
-        .git_ignore(true)
-        .max_depth(Some(3)) // Only check a few levels deep for performance
-        .build();
+        .git_ignore(true)  // Always respect .gitignore for detection
+        .max_depth(Some(3)); // Only check a few levels deep for performance
+    
+    let walker = builder.build();
 
     for result in walker {
         if let Ok(entry) = result {
