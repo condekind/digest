@@ -164,6 +164,7 @@ fn build_ignore_patterns(main_language: &Option<String>, is_godot_project: bool)
         "build".to_string(),
         "dist".to_string(),
         "venv".to_string(),
+        ".venv".to_string(),
         "env".to_string(),
         ".env".to_string(),
         ".DS_Store".to_string(),
