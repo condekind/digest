@@ -35,13 +35,16 @@ struct Cli {
     /// Output file (defaults to stdout)
     #[clap(short, long)]
     output: Option<PathBuf>,
+
+    /// List files that would be included without generating the digest
+    #[clap(short, long)]
+    list: bool,
 }
 
 #[derive(Serialize, Debug)]
 struct FileInfo {
     path: String,
     language: Option<String>,
-    size: u64,
     content: String,
 }
 
@@ -65,6 +68,12 @@ fn main() -> Result<()> {
 
     info!("Analyzing project at: {}", project_path.display());
 
+    // Check if it's a Godot project
+    let is_godot_project = is_godot_project(&project_path);
+    if is_godot_project {
+        info!("Detected Godot project");
+    }
+
     // Step 1: Determine the predominant language
     let languages = detect_languages(&project_path)?;
     let language_breakdown = get_language_breakdown(&languages);
@@ -73,8 +82,9 @@ fn main() -> Result<()> {
     debug!("Main language detected: {:?}", main_language);
     debug!("Language breakdown: {:?}", language_breakdown);
 
-    // Step 2: Build ignore patterns based on the main language
-    let ignore_patterns = build_ignore_patterns(&main_language);
+    // Step 2: Build ignore patterns based on the main language and check for .digestignore
+    let ignore_patterns = check_for_digestignore(&project_path)
+        .unwrap_or_else(|_| build_ignore_patterns(&main_language, is_godot_project));
 
     // Step 3: Collect relevant files
     let files = collect_relevant_files(
@@ -82,9 +92,19 @@ fn main() -> Result<()> {
         &ignore_patterns,
         cli.max_files,
         cli.max_file_size * 1024, // Convert KB to bytes
+        is_godot_project,
     )?;
 
     info!("Found {} relevant files", files.len());
+
+    // If list option is specified, just print the file paths and exit
+    if cli.list {
+        println!("Files that would be included in the digest:");
+        for file in &files {
+            println!("{}", file.path);
+        }
+        return Ok(());
+    }
 
     // Step 4: Create the digest
     let project_name = project_path
@@ -132,7 +152,7 @@ fn get_main_language(language_breakdown: &HashMap<String, usize>) -> Option<Stri
         .map(|(lang, _)| lang.clone())
 }
 
-fn build_ignore_patterns(main_language: &Option<String>) -> HashSet<String> {
+fn build_ignore_patterns(main_language: &Option<String>, is_godot_project: bool) -> HashSet<String> {
     // Common patterns to ignore across all languages
     let mut patterns = HashSet::from([
         ".git".to_string(),
@@ -179,36 +199,108 @@ fn build_ignore_patterns(main_language: &Option<String>) -> HashSet<String> {
                 patterns.insert("vendor".to_string());
                 patterns.insert("*.pb.go".to_string());
             }
+            "C#" => {
+                // If it's not a Godot project, use default C# ignores
+                if !is_godot_project {
+                    patterns.insert("bin".to_string());
+                    patterns.insert("obj".to_string());
+                    patterns.insert("*.dll".to_string());
+                }
+            }
             _ => {}
         }
     }
 
+    // For Godot projects, make sure we don't ignore important Godot files
+    if is_godot_project {
+        // Don't ignore .import directory as it contains important Godot metadata
+        patterns.remove(".import");
+        // Don't ignore addons directory as it contains Godot plugins
+        patterns.remove("addons");
+    }
+
     patterns
+}
+
+fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
+    let digestignore_path = project_path.join(".digestignore");
+
+    if !digestignore_path.exists() {
+        return Err(anyhow::anyhow!("No .digestignore file found"));
+    }
+
+    info!("Using .digestignore file at {}", digestignore_path.display());
+
+    // Use the ignore crate to build a gitignore-like matcher from the .digestignore file
+    let content = fs::read_to_string(&digestignore_path)
+        .with_context(|| format!("Failed to read .digestignore at {}", digestignore_path.display()))?;
+
+    // Add .git to always ignore
+    let mut patterns = HashSet::from([".git".to_string()]);
+
+    for line in content.lines() {
+        let line = line.trim();
+        // Skip empty lines and comments
+        if !line.is_empty() && !line.starts_with('#') {
+            patterns.insert(line.to_string());
+        }
+    }
+
+    Ok(patterns)
 }
 
 fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
     // Get the path as a string
     let path_str = path.to_string_lossy();
 
+    // Normalize path for matching (replace backslashes with forward slashes on Windows)
+    let path_str = path_str.replace('\\', "/");
+
     // Check if the path matches any of the ignore patterns
     for pattern in ignore_patterns {
+        // Always ignore .git directory
+        if path_str.contains("/.git/") || path_str == ".git" {
+            return true;
+        }
+
+        // Handle different gitignore pattern types
+        let pattern = pattern.trim();
+
+        // Empty lines or comments
+        if pattern.is_empty() || pattern.starts_with('#') {
+            continue;
+        }
+
+        // Negated patterns (we're not supporting these for simplicity)
+        if pattern.starts_with('!') {
+            continue;
+        }
+
+        // Direct directory match (ends with slash)
+        if pattern.ends_with('/') && path_str.contains(&format!("{}", &pattern[..pattern.len()-1])) {
+            return true;
+        }
+
+        // Handle glob patterns with * (simplified implementation)
         if pattern.contains('*') {
-            // Simple glob matching (this is a very basic implementation)
             let parts: Vec<&str> = pattern.split('*').collect();
-            if parts.len() == 2 && pattern.starts_with('*') {
-                // Handles "*.extension" pattern
-                if path_str.ends_with(parts[1]) {
+
+            // Simple cases
+            if parts.len() == 2 {
+                if pattern.starts_with('*') && path_str.ends_with(parts[1]) {
+                    // *suffix pattern
                     return true;
-                }
-            } else if parts.len() == 2 && pattern.ends_with('*') {
-                // Handles "prefix*" pattern
-                if path_str.starts_with(parts[0]) {
+                } else if pattern.ends_with('*') && path_str.starts_with(parts[0]) {
+                    // prefix* pattern
+                    return true;
+                } else if path_str.starts_with(parts[0]) && path_str.ends_with(parts[1]) {
+                    // prefix*suffix pattern
                     return true;
                 }
             }
         } else {
-            // Direct matches
-            if path_str.contains(pattern) {
+            // Direct match (either exact or as a substring)
+            if path_str.ends_with(pattern) || path_str.contains(&format!("/{}", pattern)) {
                 return true;
             }
         }
@@ -222,6 +314,7 @@ fn collect_relevant_files(
     ignore_patterns: &HashSet<String>,
     max_files: usize,
     max_file_size: u64,
+    is_godot_project: bool,
 ) -> Result<Vec<FileInfo>> {
     let mut files = Vec::new();
 
@@ -267,6 +360,30 @@ fn collect_relevant_files(
             continue;
         }
 
+        // Check if this is a file we want to include
+        let extension = path.extension().and_then(|ext| ext.to_str());
+
+        // For Godot projects, we want to prioritize certain file types
+        let should_include = if is_godot_project {
+            match extension {
+                Some("gd") | Some("tscn") | Some("cs") | Some("godot") => true,
+                Some("tres") | Some("import") | Some("shader") => true,
+                Some(ext) if is_common_code_file(ext) => true,
+                _ => false,
+            }
+        } else {
+            // For non-Godot projects, use the regular logic
+            match extension {
+                Some(ext) if is_common_code_file(ext) => true,
+                _ => false,
+            }
+        };
+
+        if !should_include {
+            debug!("Skipping non-code file: {}", path.display());
+            continue;
+        }
+
         // Read file content
         let content = match fs::read_to_string(path) {
             Ok(content) => content,
@@ -276,30 +393,35 @@ fn collect_relevant_files(
             }
         };
 
-        // Determine file language based on extension
-        let language = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| match ext {
-                "rs" => "Rust",
-                "js" => "JavaScript",
-                "ts" => "TypeScript",
-                "py" => "Python",
-                "java" => "Java",
-                "go" => "Go",
-                "c" | "cpp" | "h" | "hpp" => "C/C++",
-                "rb" => "Ruby",
-                "php" => "PHP",
-                "cs" => "C#",
-                "html" => "HTML",
-                "css" => "CSS",
-                "json" => "JSON",
-                "md" => "Markdown",
-                "yml" | "yaml" => "YAML",
-                "toml" => "TOML",
-                _ => "Unknown",
-            })
-            .map(String::from);
+        // Determine file language based on extension and project type
+        let language = match extension {
+            Some(ext) => {
+                let lang = match ext {
+                    "rs" => "Rust",
+                    "js" => "JavaScript",
+                    "ts" => "TypeScript",
+                    "py" => "Python",
+                    "java" => "Java",
+                    "go" => "Go",
+                    "c" | "cpp" | "h" | "hpp" => "C/C++",
+                    "rb" => "Ruby",
+                    "php" => "PHP",
+                    "cs" => if is_godot_project { "GDScript C#" } else { "C#" },
+                    "html" => "HTML",
+                    "css" => "CSS",
+                    "json" => "JSON",
+                    "md" => "Markdown",
+                    "yml" | "yaml" => "YAML",
+                    "toml" => "TOML",
+                    "gd" => "GDScript",
+                    "tscn" | "tres" => "Godot Scene",
+                    "shader" => "Godot Shader",
+                    _ => "Unknown",
+                };
+                Some(lang.to_string())
+            }
+            None => None,
+        };
 
         let relative_path = path.strip_prefix(project_path)
             .with_context(|| format!("Failed to strip prefix from {}", path.display()))?
@@ -309,7 +431,6 @@ fn collect_relevant_files(
         files.push(FileInfo {
             path: relative_path,
             language,
-            size: metadata.len(),
             content,
         });
 
@@ -373,12 +494,6 @@ fn format_markdown(digest: &Digest) -> String {
     for file in &digest.files {
         output.push_str(&format!("### {}\n\n", file.path));
 
-        if let Some(lang) = &file.language {
-            output.push_str(&format!("**Language**: {}\n\n", lang));
-        }
-
-        output.push_str(&format!("**Size**: {} bytes\n\n", file.size));
-
         output.push_str("```");
         if let Some(lang) = &file.language {
             let lang_tag = match lang.as_str() {
@@ -391,13 +506,17 @@ fn format_markdown(digest: &Digest) -> String {
                 "C/C++" => "cpp",
                 "Ruby" => "ruby",
                 "PHP" => "php",
-                "C#" => "cs",
+                "C#" => "csharp",
+                "GDScript C#" => "csharp",
                 "HTML" => "html",
                 "CSS" => "css",
                 "JSON" => "json",
                 "Markdown" => "md",
                 "YAML" => "yaml",
                 "TOML" => "toml",
+                "GDScript" => "gdscript",
+                "Godot Scene" => "gdscript",
+                "Godot Shader" => "glsl",
                 _ => "",
             };
             if !lang_tag.is_empty() {
@@ -421,5 +540,54 @@ impl PathToStringExt for Path {
     fn to_string_lossy(&self) -> String {
         self.to_string_lossy().to_string()
     }
+}
+
+// Function to detect if a project is a Godot project
+fn is_godot_project(project_path: &Path) -> bool {
+    // Check for project.godot file, which is the main project file for Godot projects
+    let project_godot_path = project_path.join("project.godot");
+    if project_godot_path.exists() {
+        return true;
+    }
+
+    // Check for godot/ or .godot/ directories
+    let godot_dir = project_path.join("godot");
+    let hidden_godot_dir = project_path.join(".godot");
+    if godot_dir.exists() || hidden_godot_dir.exists() {
+        return true;
+    }
+
+    // Look for .tscn or .gd files in the project
+    let walker = WalkBuilder::new(project_path)
+        .hidden(false)
+        .git_ignore(true)
+        .max_depth(Some(3)) // Only check a few levels deep for performance
+        .build();
+
+    for result in walker {
+        if let Ok(entry) = result {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    if let Some(ext_str) = ext.to_str() {
+                        if ext_str == "tscn" || ext_str == "gd" {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+// Helper function to check if a file extension is a common code file
+fn is_common_code_file(ext: &str) -> bool {
+    matches!(ext, 
+        "rs" | "js" | "ts" | "py" | "java" | "go" | "c" | "cpp" | "h" | "hpp" | 
+        "rb" | "php" | "cs" | "html" | "css" | "json" | "md" | "yml" | "yaml" | 
+        "toml" | "gd" | "tscn" | "tres" | "shader"
+    )
 }
 
