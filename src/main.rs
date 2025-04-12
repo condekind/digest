@@ -25,7 +25,7 @@ struct Cli {
     max_files: usize,
 
     /// Maximum file size in KB to consider
-    #[clap(short = 's', long, default_value = "100")]
+    #[clap(short = 's', long, default_value = "500")]
     max_file_size: u64,
 
     /// Output format (json or markdown)
