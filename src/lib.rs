@@ -1,9 +1,9 @@
 // Re-export the main module functions for testing
+use anyhow::{Context, Result};
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
-use serde::Serialize;
 
 #[derive(Serialize, Debug)]
 pub struct FileInfo {
@@ -370,4 +370,4 @@ fn is_common_code_file(ext: &str) -> bool {
             | "tres"
             | "shader"
     )
-} 
+}

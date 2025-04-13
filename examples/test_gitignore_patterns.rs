@@ -1,11 +1,11 @@
+use anyhow::Result;
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 use tempfile::TempDir;
-use anyhow::Result;
 
-use digest::{should_ignore, check_for_gitignore, check_for_digestignore};
+use digest::{check_for_digestignore, check_for_gitignore, should_ignore};
 
 /// Create a temporary test directory with some files
 fn create_test_directory() -> Result<TempDir> {
@@ -45,24 +45,20 @@ fn create_digestignore(root_path: &Path, patterns: &[&str]) -> Result<()> {
 
 fn test_gitignore_patterns() -> Result<()> {
     let temp_dir = create_test_directory()?;
-    let gitignore_patterns = &[
-        "node_modules/",
-        "build/",
-        "*.test.*",
-    ];
-    
+    let gitignore_patterns = &["node_modules/", "build/", "*.test.*"];
+
     create_gitignore(temp_dir.path(), gitignore_patterns)?;
-    
+
     // Load the gitignore patterns
     let patterns = check_for_gitignore(temp_dir.path())?;
-    
+
     // Test paths that should be ignored
     let should_be_ignored = vec![
         temp_dir.path().join("node_modules/package.json"),
         temp_dir.path().join("build/output.js"),
         temp_dir.path().join("src/file.test.rs"),
     ];
-    
+
     for path in should_be_ignored {
         if !should_ignore(&path, &patterns) {
             println!("ERROR: Expected {:?} to be ignored, but it wasn't", path);
@@ -70,13 +66,13 @@ fn test_gitignore_patterns() -> Result<()> {
             println!("OK: {:?} was ignored as expected", path);
         }
     }
-    
+
     // Test paths that should NOT be ignored
     let should_not_be_ignored = vec![
         temp_dir.path().join("src/main.rs"),
         temp_dir.path().join("README.md"),
     ];
-    
+
     for path in should_not_be_ignored {
         if should_ignore(&path, &patterns) {
             println!("ERROR: Expected {:?} NOT to be ignored, but it was", path);
@@ -84,36 +80,30 @@ fn test_gitignore_patterns() -> Result<()> {
             println!("OK: {:?} was not ignored as expected", path);
         }
     }
-    
+
     Ok(())
 }
 
 fn test_both_ignore_files() -> Result<()> {
     let temp_dir = create_test_directory()?;
-    let gitignore_patterns = &[
-        "node_modules/",
-        "build/",
-    ];
-    
-    let digestignore_patterns = &[
-        "*.md",
-        "*.test.*",
-    ];
-    
+    let gitignore_patterns = &["node_modules/", "build/"];
+
+    let digestignore_patterns = &["*.md", "*.test.*"];
+
     create_gitignore(temp_dir.path(), gitignore_patterns)?;
     create_digestignore(temp_dir.path(), digestignore_patterns)?;
-    
+
     // Load both ignore patterns
     let mut ignore_patterns = HashSet::new();
-    
+
     if let Ok(git_patterns) = check_for_gitignore(temp_dir.path()) {
         ignore_patterns.extend(git_patterns);
     }
-    
+
     if let Ok(digest_patterns) = check_for_digestignore(temp_dir.path()) {
         ignore_patterns.extend(digest_patterns);
     }
-    
+
     // Test paths that should be ignored
     let should_be_ignored = vec![
         temp_dir.path().join("node_modules/package.json"), // From gitignore
@@ -121,7 +111,7 @@ fn test_both_ignore_files() -> Result<()> {
         temp_dir.path().join("README.md"),                 // From digestignore
         temp_dir.path().join("src/file.test.rs"),          // From digestignore
     ];
-    
+
     for path in should_be_ignored {
         if !should_ignore(&path, &ignore_patterns) {
             println!("ERROR: Expected {:?} to be ignored, but it wasn't", path);
@@ -129,13 +119,13 @@ fn test_both_ignore_files() -> Result<()> {
             println!("OK: {:?} was ignored as expected", path);
         }
     }
-    
+
     // Test paths that should NOT be ignored
     let should_not_be_ignored = vec![
         temp_dir.path().join("src/main.rs"),
         temp_dir.path().join("src/test/test_utils.rs"),
     ];
-    
+
     for path in should_not_be_ignored {
         if should_ignore(&path, &ignore_patterns) {
             println!("ERROR: Expected {:?} NOT to be ignored, but it was", path);
@@ -143,16 +133,16 @@ fn test_both_ignore_files() -> Result<()> {
             println!("OK: {:?} was not ignored as expected", path);
         }
     }
-    
+
     Ok(())
 }
 
 fn main() -> Result<()> {
     println!("Testing gitignore patterns...");
     test_gitignore_patterns()?;
-    
+
     println!("\nTesting both gitignore and digestignore...");
     test_both_ignore_files()?;
-    
+
     Ok(())
-} 
+}

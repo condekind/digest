@@ -1,27 +1,19 @@
+use anyhow::Result;
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use anyhow::Result;
 
 // Re-export the main module functions for testing
 use digest::{
-    check_for_digestignore, 
-    check_for_gitignore, 
-    should_ignore,
-    collect_relevant_files,
-    FileInfo,
+    check_for_digestignore, check_for_gitignore, collect_relevant_files, should_ignore, FileInfo,
 };
 
 mod pattern_generator;
 use pattern_generator::{
-    create_test_directory,
-    get_common_test_structure,
-    get_common_test_cases,
-    get_complex_test_cases,
-    get_test_file_patterns,
-    run_ignore_pattern_tests,
+    create_test_directory, get_common_test_cases, get_common_test_structure,
+    get_complex_test_cases, get_test_file_patterns, run_ignore_pattern_tests,
 };
 
 /// Create a directory structure for testing ignore patterns
@@ -89,41 +81,41 @@ fn run_ignore_test(
     // Clear any existing ignore files
     let gitignore_path = temp_dir.join(".gitignore");
     let digestignore_path = temp_dir.join(".digestignore");
-    
+
     if gitignore_path.exists() {
         fs::remove_file(&gitignore_path)?;
     }
-    
+
     if digestignore_path.exists() {
         fs::remove_file(&digestignore_path)?;
     }
-    
+
     // Create new ignore files if requested
     if let Some(patterns) = gitignore_patterns {
         create_gitignore(temp_dir, patterns)?;
     }
-    
+
     if let Some(patterns) = digestignore_patterns {
         create_digestignore(temp_dir, patterns)?;
     }
-    
+
     // Build the ignore patterns set
     let mut ignore_patterns = HashSet::new();
-    
+
     // Try to get patterns from .digestignore if it exists
     if digestignore_path.exists() {
         if let Ok(patterns) = check_for_digestignore(temp_dir) {
             ignore_patterns.extend(patterns);
         }
     }
-    
+
     // Try to get patterns from .gitignore if it exists and respect_gitignore is true
     if gitignore_path.exists() && respect_gitignore {
         if let Ok(patterns) = check_for_gitignore(temp_dir) {
             ignore_patterns.extend(patterns);
         }
     }
-    
+
     // Collect the files
     collect_relevant_files(
         temp_dir,
@@ -138,43 +130,35 @@ fn run_ignore_test(
 #[test]
 fn test_gitignore_only() -> Result<()> {
     let temp_dir = create_test_directory_structure()?;
-    let gitignore_patterns = &[
-        "node_modules/",
-        "build/",
-        "*.test.*",
-    ];
-    
+    let gitignore_patterns = &["node_modules/", "build/", "*.test.*"];
+
     let files = run_ignore_test(
         temp_dir.path(),
         Some(gitignore_patterns),
         None,
         50,
         10000000, // 10MB, larger than any test file
-        true, // respect gitignore
+        true,     // respect gitignore
     )?;
-    
+
     // These should be ignored due to .gitignore
     assert!(!file_exists_in_result(&files, "node_modules/package.json"));
     assert!(!file_exists_in_result(&files, "build/output.js"));
     assert!(!file_exists_in_result(&files, "src/file.test.rs"));
-    
+
     // These should be included
     assert!(file_exists_in_result(&files, "src/main.rs"));
     assert!(file_exists_in_result(&files, "src/lib.rs"));
     assert!(file_exists_in_result(&files, "README.md"));
-    
+
     Ok(())
 }
 
 #[test]
 fn test_digestignore_only() -> Result<()> {
     let temp_dir = create_test_directory_structure()?;
-    let digestignore_patterns = &[
-        "docs/",
-        "test/",
-        "README.md",
-    ];
-    
+    let digestignore_patterns = &["docs/", "test/", "README.md"];
+
     let files = run_ignore_test(
         temp_dir.path(),
         None,
@@ -183,33 +167,27 @@ fn test_digestignore_only() -> Result<()> {
         10000000,
         false, // don't respect gitignore
     )?;
-    
+
     // These should be ignored due to .digestignore
     assert!(!file_exists_in_result(&files, "docs/README.md"));
     assert!(!file_exists_in_result(&files, "test/file.rs"));
     assert!(!file_exists_in_result(&files, "README.md"));
-    
+
     // These should be included
     assert!(file_exists_in_result(&files, "src/main.rs"));
     assert!(file_exists_in_result(&files, "src/lib.rs"));
     assert!(file_exists_in_result(&files, "node_modules/package.json")); // included because we're not respecting gitignore
-    
+
     Ok(())
 }
 
 #[test]
 fn test_both_ignore_files() -> Result<()> {
     let temp_dir = create_test_directory_structure()?;
-    let gitignore_patterns = &[
-        "node_modules/",
-        "build/",
-    ];
-    
-    let digestignore_patterns = &[
-        "docs/",
-        "test/",
-    ];
-    
+    let gitignore_patterns = &["node_modules/", "build/"];
+
+    let digestignore_patterns = &["docs/", "test/"];
+
     let files = run_ignore_test(
         temp_dir.path(),
         Some(gitignore_patterns),
@@ -218,36 +196,30 @@ fn test_both_ignore_files() -> Result<()> {
         10000000,
         true, // respect gitignore
     )?;
-    
+
     // These should be ignored due to .gitignore
     assert!(!file_exists_in_result(&files, "node_modules/package.json"));
     assert!(!file_exists_in_result(&files, "build/output.js"));
-    
+
     // These should be ignored due to .digestignore
     assert!(!file_exists_in_result(&files, "docs/README.md"));
     assert!(!file_exists_in_result(&files, "test/file.rs"));
-    
+
     // These should be included
     assert!(file_exists_in_result(&files, "src/main.rs"));
     assert!(file_exists_in_result(&files, "src/lib.rs"));
     assert!(file_exists_in_result(&files, "README.md"));
-    
+
     Ok(())
 }
 
 #[test]
 fn test_no_respect_gitignore() -> Result<()> {
     let temp_dir = create_test_directory_structure()?;
-    let gitignore_patterns = &[
-        "node_modules/",
-        "build/",
-    ];
-    
-    let digestignore_patterns = &[
-        "docs/",
-        "test/",
-    ];
-    
+    let gitignore_patterns = &["node_modules/", "build/"];
+
+    let digestignore_patterns = &["docs/", "test/"];
+
     let files = run_ignore_test(
         temp_dir.path(),
         Some(gitignore_patterns),
@@ -256,36 +228,33 @@ fn test_no_respect_gitignore() -> Result<()> {
         10000000,
         false, // don't respect gitignore
     )?;
-    
+
     // These should NOT be ignored (gitignore not respected)
     assert!(file_exists_in_result(&files, "node_modules/package.json"));
     assert!(file_exists_in_result(&files, "build/output.js"));
-    
+
     // These should still be ignored (digestignore is respected)
     assert!(!file_exists_in_result(&files, "docs/README.md"));
     assert!(!file_exists_in_result(&files, "test/file.rs"));
-    
+
     // These should be included
     assert!(file_exists_in_result(&files, "src/main.rs"));
     assert!(file_exists_in_result(&files, "src/lib.rs"));
     assert!(file_exists_in_result(&files, "README.md"));
-    
+
     Ok(())
 }
 
 #[test]
 fn test_overlapping_patterns() -> Result<()> {
     let temp_dir = create_test_directory_structure()?;
-    let gitignore_patterns = &[
-        "src/test/",
-        "README.md",
-    ];
-    
+    let gitignore_patterns = &["src/test/", "README.md"];
+
     let digestignore_patterns = &[
         "src/lib/",
         "README.md", // Duplicate pattern
     ];
-    
+
     let files = run_ignore_test(
         temp_dir.path(),
         Some(gitignore_patterns),
@@ -294,32 +263,26 @@ fn test_overlapping_patterns() -> Result<()> {
         10000000,
         true, // respect gitignore
     )?;
-    
+
     // These should be ignored
     assert!(!file_exists_in_result(&files, "src/test/test_utils.rs"));
     assert!(!file_exists_in_result(&files, "src/lib/utils.rs"));
     assert!(!file_exists_in_result(&files, "README.md"));
-    
+
     // These should be included
     assert!(file_exists_in_result(&files, "src/main.rs"));
     assert!(file_exists_in_result(&files, "src/lib.rs"));
-    
+
     Ok(())
 }
 
 #[test]
 fn test_complex_pattern_combinations() -> Result<()> {
     let temp_dir = create_test_directory_structure()?;
-    let gitignore_patterns = &[
-        "**/test/**",
-        "build/",
-    ];
-    
-    let digestignore_patterns = &[
-        "**/*.md",
-        "node_modules/",
-    ];
-    
+    let gitignore_patterns = &["**/test/**", "build/"];
+
+    let digestignore_patterns = &["**/*.md", "node_modules/"];
+
     let files = run_ignore_test(
         temp_dir.path(),
         Some(gitignore_patterns),
@@ -328,39 +291,39 @@ fn test_complex_pattern_combinations() -> Result<()> {
         10000000,
         true, // respect gitignore
     )?;
-    
+
     // These should be ignored due to .gitignore
     assert!(!file_exists_in_result(&files, "src/test/test_utils.rs"));
     assert!(!file_exists_in_result(&files, "test/file.rs"));
     assert!(!file_exists_in_result(&files, "build/output.js"));
-    
+
     // These should be ignored due to .digestignore
     assert!(!file_exists_in_result(&files, "docs/README.md"));
     assert!(!file_exists_in_result(&files, "README.md"));
     assert!(!file_exists_in_result(&files, "src/lib/README.md"));
     assert!(!file_exists_in_result(&files, "node_modules/package.json"));
-    
+
     // These should be included
     assert!(file_exists_in_result(&files, "src/main.rs"));
     assert!(file_exists_in_result(&files, "src/lib.rs"));
     assert!(file_exists_in_result(&files, "src/lib/utils.rs"));
     assert!(file_exists_in_result(&files, "src/file.rs"));
-    
+
     Ok(())
 }
 
 #[test]
 fn test_file_size_limit() -> Result<()> {
     let temp_dir = create_test_directory_structure()?;
-    
+
     // Create a large file that exceeds the limit
     let large_file_path = temp_dir.path().join("large_file.rs");
     let mut large_file = File::create(&large_file_path)?;
-    
+
     // Create a 10KB file
     let large_content = "// Large file content\n".repeat(500);
     large_file.write_all(large_content.as_bytes())?;
-    
+
     let files = run_ignore_test(
         temp_dir.path(),
         None,
@@ -369,26 +332,26 @@ fn test_file_size_limit() -> Result<()> {
         5 * 1024, // 5KB limit, smaller than the large file
         false,
     )?;
-    
+
     // The large file should be ignored due to size
     assert!(!file_exists_in_result(&files, "large_file.rs"));
-    
+
     // Other files should be included
     assert!(file_exists_in_result(&files, "src/main.rs"));
-    
+
     Ok(())
 }
 
 #[test]
 fn test_max_files_limit() -> Result<()> {
     let temp_dir = create_test_directory_structure()?;
-    
+
     // Create many additional files
     for i in 0..20 {
         let file_path = temp_dir.path().join(format!("extra_file_{}.rs", i));
         File::create(file_path)?.write_all(format!("// File {}", i).as_bytes())?;
     }
-    
+
     let files = run_ignore_test(
         temp_dir.path(),
         None,
@@ -397,10 +360,10 @@ fn test_max_files_limit() -> Result<()> {
         10000000,
         false,
     )?;
-    
+
     // Check that only 5 files were included
     assert_eq!(files.len(), 5);
-    
+
     Ok(())
 }
 
@@ -411,7 +374,7 @@ fn test_directory_structure_generator() -> Result<()> {
     // Setup a temp directory
     let temp_dir = TempDir::new()?;
     let root = temp_dir.path();
-    
+
     // Define our test structure
     let structure = [
         ("src/main.rs", "fn main() {}"),
@@ -423,7 +386,7 @@ fn test_directory_structure_generator() -> Result<()> {
         ("build/output.js", "// Built output"),
         ("node_modules/package/index.js", "module.exports = {}"),
     ];
-    
+
     // Create the files
     for (path, content) in &structure {
         let full_path = root.join(path);
@@ -432,62 +395,99 @@ fn test_directory_structure_generator() -> Result<()> {
         }
         fs::write(full_path, content)?;
     }
-    
+
     // Test with different gitignore patterns
     let test_cases = [
         // (gitignore_patterns, digestignore_patterns, expected_included, expected_excluded)
         (
             vec!["node_modules/", "build/"],
             vec!["docs/"],
-            vec!["src/main.rs", "src/lib.rs", "src/utils/helpers.rs", "src/tests/test_main.rs", "tests/integration/mod.rs"],
-            vec!["docs/README.md", "build/output.js", "node_modules/package/index.js"],
+            vec![
+                "src/main.rs",
+                "src/lib.rs",
+                "src/utils/helpers.rs",
+                "src/tests/test_main.rs",
+                "tests/integration/mod.rs",
+            ],
+            vec![
+                "docs/README.md",
+                "build/output.js",
+                "node_modules/package/index.js",
+            ],
         ),
         (
             vec!["**/test*/**"],
             vec!["**/*.md"],
-            vec!["src/main.rs", "src/lib.rs", "src/utils/helpers.rs", "build/output.js", "node_modules/package/index.js"],
-            vec!["src/tests/test_main.rs", "tests/integration/mod.rs", "docs/README.md"],
+            vec![
+                "src/main.rs",
+                "src/lib.rs",
+                "src/utils/helpers.rs",
+                "build/output.js",
+                "node_modules/package/index.js",
+            ],
+            vec![
+                "src/tests/test_main.rs",
+                "tests/integration/mod.rs",
+                "docs/README.md",
+            ],
         ),
         (
             vec![],
             vec!["**/*.js"],
-            vec!["src/main.rs", "src/lib.rs", "src/utils/helpers.rs", "src/tests/test_main.rs", "tests/integration/mod.rs", "docs/README.md"],
+            vec![
+                "src/main.rs",
+                "src/lib.rs",
+                "src/utils/helpers.rs",
+                "src/tests/test_main.rs",
+                "tests/integration/mod.rs",
+                "docs/README.md",
+            ],
             vec!["build/output.js", "node_modules/package/index.js"],
         ),
     ];
-    
-    for (i, (gitignore, digestignore, expected_included, expected_excluded)) in test_cases.iter().enumerate() {
+
+    for (i, (gitignore, digestignore, expected_included, expected_excluded)) in
+        test_cases.iter().enumerate()
+    {
         // Set up the ignore files
         create_gitignore(root, &gitignore.iter().map(|s| *s).collect::<Vec<_>>())?;
         create_digestignore(root, &digestignore.iter().map(|s| *s).collect::<Vec<_>>())?;
-        
+
         // Build the ignore patterns set
         let mut ignore_patterns = HashSet::new();
-        
+
         // Add patterns from both files
         if let Ok(patterns) = check_for_digestignore(root) {
             ignore_patterns.extend(patterns);
         }
-        
+
         if let Ok(patterns) = check_for_gitignore(root) {
             ignore_patterns.extend(patterns);
         }
-        
+
         // Check each expected included file
         for path in expected_included {
             let full_path = root.join(path);
-            assert!(!should_ignore(&full_path, &ignore_patterns), 
-                   "Test case {}: Expected {} to be included but it was ignored", i, path);
+            assert!(
+                !should_ignore(&full_path, &ignore_patterns),
+                "Test case {}: Expected {} to be included but it was ignored",
+                i,
+                path
+            );
         }
-        
+
         // Check each expected excluded file
         for path in expected_excluded {
             let full_path = root.join(path);
-            assert!(should_ignore(&full_path, &ignore_patterns), 
-                   "Test case {}: Expected {} to be excluded but it was included", i, path);
+            assert!(
+                should_ignore(&full_path, &ignore_patterns),
+                "Test case {}: Expected {} to be excluded but it was included",
+                i,
+                path
+            );
         }
     }
-    
+
     Ok(())
 }
 
@@ -495,24 +495,15 @@ fn test_directory_structure_generator() -> Result<()> {
 fn test_programmatic_pattern_tests() -> Result<()> {
     // Get the common test structure
     let structure = get_common_test_structure();
-    
+
     // Run tests with common test cases
-    run_ignore_pattern_tests(
-        &structure, 
-        &get_common_test_cases()
-    )?;
-    
+    run_ignore_pattern_tests(&structure, &get_common_test_cases())?;
+
     // Run tests with complex test cases
-    run_ignore_pattern_tests(
-        &structure, 
-        &get_complex_test_cases()
-    )?;
-    
+    run_ignore_pattern_tests(&structure, &get_complex_test_cases())?;
+
     // Run tests with test file patterns
-    run_ignore_pattern_tests(
-        &structure, 
-        &get_test_file_patterns()
-    )?;
-    
+    run_ignore_pattern_tests(&structure, &get_test_file_patterns())?;
+
     Ok(())
-} 
+}
