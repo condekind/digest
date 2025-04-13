@@ -404,6 +404,7 @@ pub fn collect_relevant_files(
                     "c" | "cpp" | "h" | "hpp" => "C/C++",
                     "rb" => "Ruby",
                     "php" => "PHP",
+                    "lua" => "Lua",
                     "cs" => {
                         if is_godot_project {
                             "GDScript C#"
@@ -470,6 +471,7 @@ fn is_common_code_file(ext: &str) -> bool {
             | "yml"
             | "yaml"
             | "toml"
+            | "lua"
             | "gd"
             | "tscn"
             | "tres"
