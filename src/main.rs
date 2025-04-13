@@ -51,6 +51,10 @@ struct Cli {
     /// Disable all ignore patterns (both .gitignore and .digestignore)
     #[clap(long)]
     no_ignore: bool,
+
+    /// Additional patterns to ignore (can be specified multiple times)
+    #[clap(long = "ignore-pattern", value_name = "PATTERN")]
+    ignore_patterns: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -96,7 +100,7 @@ fn main() -> Result<()> {
 
     // Step 2: Get ignore patterns from .digestignore, .gitignore, or defaults
     let mut ignore_patterns = HashSet::new();
-    
+
     // Don't process any ignore files if --no-ignore is used
     if !cli.no_ignore {
         // Try to get patterns from .digestignore, unless --no-digestignore is used
@@ -105,7 +109,7 @@ fn main() -> Result<()> {
                 Ok(digestignore_patterns) => {
                     ignore_patterns.extend(digestignore_patterns);
                     true
-                },
+                }
                 Err(_) => {
                     debug!("No .digestignore file found.");
                     false
@@ -115,14 +119,14 @@ fn main() -> Result<()> {
             debug!("Skipping .digestignore due to --no-digestignore flag.");
             false
         };
-        
+
         // Try to get patterns from .gitignore, unless --no-gitignore is used
         let using_gitignore = if !cli.no_gitignore {
             match check_for_gitignore(&project_path) {
                 Ok(gitignore_patterns) => {
                     ignore_patterns.extend(gitignore_patterns);
                     true
-                },
+                }
                 Err(_) => {
                     debug!("No .gitignore file found.");
                     false
@@ -132,7 +136,7 @@ fn main() -> Result<()> {
             debug!("Skipping .gitignore due to --no-gitignore flag.");
             false
         };
-        
+
         // If no ignore files were found or used, use default patterns
         if ignore_patterns.is_empty() {
             info!("No ignore files found or used. Using default ignore patterns.");
@@ -151,6 +155,17 @@ fn main() -> Result<()> {
         info!("Ignoring all ignore files due to --no-ignore flag.");
         // Always ignore .git directory at minimum
         ignore_patterns.insert(".git".to_string());
+    }
+
+    // Add patterns from --ignore-pattern CLI arguments
+    if !cli.ignore_patterns.is_empty() {
+        info!(
+            "Adding {} custom ignore patterns from command line",
+            cli.ignore_patterns.len()
+        );
+        for pattern in &cli.ignore_patterns {
+            ignore_patterns.insert(pattern.clone());
+        }
     }
 
     // Step 3: Collect relevant files
@@ -220,7 +235,10 @@ fn get_main_language(language_breakdown: &HashMap<String, usize>) -> Option<Stri
         .map(|(lang, _)| lang.clone())
 }
 
-fn build_ignore_patterns(main_language: &Option<String>, is_godot_project: bool) -> HashSet<String> {
+fn build_ignore_patterns(
+    main_language: &Option<String>,
+    is_godot_project: bool,
+) -> HashSet<String> {
     // Common patterns to ignore across all languages
     let mut patterns = HashSet::from([
         ".git".to_string(),
@@ -298,11 +316,18 @@ fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
         return Err(anyhow::anyhow!("No .digestignore file found"));
     }
 
-    info!("Using .digestignore file at {}", digestignore_path.display());
+    info!(
+        "Using .digestignore file at {}",
+        digestignore_path.display()
+    );
 
     // Use the ignore crate to build a gitignore-like matcher from the .digestignore file
-    let content = fs::read_to_string(&digestignore_path)
-        .with_context(|| format!("Failed to read .digestignore at {}", digestignore_path.display()))?;
+    let content = fs::read_to_string(&digestignore_path).with_context(|| {
+        format!(
+            "Failed to read .digestignore at {}",
+            digestignore_path.display()
+        )
+    })?;
 
     // Add .git to always ignore
     let mut patterns = HashSet::from([".git".to_string()]);
@@ -354,8 +379,17 @@ fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
 
     // Check if the path matches any of the ignore patterns
     for pattern in ignore_patterns {
+        // Special case for **/test/** pattern since it's common and important
+        if pattern == "**/test/**" {
+            if path_str.contains("/test/") || path_str.starts_with("test/") {
+                debug!("Ignoring {} - matches **/test/** pattern", path_str);
+                return true;
+            }
+        }
+
         // Always ignore .git directory
         if path_str.contains("/.git/") || path_str == ".git" {
+            debug!("Ignoring {} - matches .git pattern", path_str);
             return true;
         }
 
@@ -372,31 +406,122 @@ fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
             continue;
         }
 
-        // Direct directory match (ends with slash)
-        if pattern.ends_with('/') && path_str.contains(&format!("{}", &pattern[..pattern.len()-1])) {
-            return true;
+        // Handle **/ pattern at the beginning (match any directory depth)
+        if pattern.starts_with("**/") {
+            let suffix = &pattern[3..];
+            // Check if suffix appears anywhere in the path
+            if path_str == suffix
+                || path_str.ends_with(suffix)
+                || path_str.contains(&format!("/{}", suffix))
+            {
+                debug!("Ignoring {} - matches **/ pattern: {}", path_str, pattern);
+                return true;
+            }
+        }
+
+        // Handle pattern ending with /** (match any subdirectory)
+        if pattern.ends_with("/**") {
+            let prefix = &pattern[0..pattern.len() - 3];
+            if path_str.starts_with(prefix) || path_str.contains(&format!("/{}", prefix)) {
+                debug!("Ignoring {} - matches /** pattern: {}", path_str, pattern);
+                return true;
+            }
+        }
+
+        // Handle /**/ pattern (matches any directory in the middle)
+        if pattern.contains("/**/") {
+            let segments: Vec<&str> = pattern.split("/**/").collect();
+
+            if segments.len() >= 2 {
+                let prefix = segments[0];
+                let suffix = segments[1];
+
+                // Check if both prefix and suffix match parts of the path
+                // If prefix is empty, it's a pattern like "/**/suffix"
+                let prefix_matches = prefix.is_empty()
+                    || path_str.starts_with(prefix)
+                    || path_str.contains(&format!("/{}", prefix));
+
+                // If suffix is empty, it's a pattern like "prefix/**/"
+                let suffix_matches = suffix.is_empty()
+                    || path_str.ends_with(suffix)
+                    || path_str.contains(&format!("{}/", suffix));
+
+                if prefix_matches && suffix_matches {
+                    debug!("Ignoring {} - matches /**/ pattern: {}", path_str, pattern);
+                    return true;
+                }
+            }
+        }
+
+        // Directory pattern (ends with slash)
+        if pattern.ends_with('/') {
+            let dir_name = &pattern[0..pattern.len() - 1];
+
+            // Check if path contains the directory as a complete segment
+            // "test/" should match "test/file.rs" or "src/test/file.rs" but not "testing/file.rs"
+            let matches = path_str == dir_name
+                || path_str.starts_with(&format!("{}/", dir_name))
+                || path_str.contains(&format!("/{}/", dir_name));
+
+            if matches {
+                debug!(
+                    "Ignoring {} - matches directory pattern: {}",
+                    path_str, pattern
+                );
+                return true;
+            }
+
+            continue; // Skip other pattern matching for directory patterns
+        }
+
+        // Special case for *.test.* pattern
+        if pattern == "*.test.*" {
+            if path_str.contains(".test.") {
+                debug!("Ignoring {} - matches *.test.* pattern", path_str);
+                return true;
+            }
         }
 
         // Handle glob patterns with * (simplified implementation)
-        if pattern.contains('*') {
+        if pattern.contains('*') && !pattern.contains("**") {
             let parts: Vec<&str> = pattern.split('*').collect();
 
             // Simple cases
             if parts.len() == 2 {
                 if pattern.starts_with('*') && path_str.ends_with(parts[1]) {
                     // *suffix pattern
+                    debug!(
+                        "Ignoring {} - matches *suffix pattern: {}",
+                        path_str, pattern
+                    );
                     return true;
                 } else if pattern.ends_with('*') && path_str.starts_with(parts[0]) {
                     // prefix* pattern
+                    debug!(
+                        "Ignoring {} - matches prefix* pattern: {}",
+                        path_str, pattern
+                    );
                     return true;
                 } else if path_str.starts_with(parts[0]) && path_str.ends_with(parts[1]) {
                     // prefix*suffix pattern
+                    debug!(
+                        "Ignoring {} - matches prefix*suffix pattern: {}",
+                        path_str, pattern
+                    );
                     return true;
                 }
             }
         } else {
             // Direct match (either exact or as a substring)
-            if path_str.ends_with(pattern) || path_str.contains(&format!("/{}", pattern)) {
+            if path_str == pattern
+                || path_str.ends_with(pattern)
+                || path_str.contains(&format!("/{}", pattern))
+            {
+                debug!(
+                    "Ignoring {} - matches direct pattern: {}",
+                    path_str, pattern
+                );
                 return true;
             }
         }
@@ -418,11 +543,11 @@ fn collect_relevant_files(
     // Configure the walker with appropriate gitignore settings
     let mut builder = WalkBuilder::new(project_path);
     builder
-        .hidden(false)  // Include hidden files
-        .git_ignore(respect_gitignore)  // Respect .gitignore based on CLI option
-        .git_global(respect_gitignore)  // Also control global gitignore
+        .hidden(false) // Include hidden files
+        .git_ignore(respect_gitignore) // Respect .gitignore based on CLI option
+        .git_global(respect_gitignore) // Also control global gitignore
         .git_exclude(respect_gitignore); // And git exclude rules
-    
+
     let walker = builder.build();
 
     for result in walker {
@@ -457,7 +582,11 @@ fn collect_relevant_files(
         };
 
         if metadata.len() > max_file_size {
-            debug!("Skipping large file: {} ({} bytes)", path.display(), metadata.len());
+            debug!(
+                "Skipping large file: {} ({} bytes)",
+                path.display(),
+                metadata.len()
+            );
             continue;
         }
 
@@ -507,7 +636,13 @@ fn collect_relevant_files(
                     "c" | "cpp" | "h" | "hpp" => "C/C++",
                     "rb" => "Ruby",
                     "php" => "PHP",
-                    "cs" => if is_godot_project { "GDScript C#" } else { "C#" },
+                    "cs" => {
+                        if is_godot_project {
+                            "GDScript C#"
+                        } else {
+                            "C#"
+                        }
+                    }
                     "html" => "HTML",
                     "css" => "CSS",
                     "json" => "JSON",
@@ -524,7 +659,8 @@ fn collect_relevant_files(
             None => None,
         };
 
-        let relative_path = path.strip_prefix(project_path)
+        let relative_path = path
+            .strip_prefix(project_path)
             .with_context(|| format!("Failed to strip prefix from {}", path.display()))?
             .to_string_lossy()
             .to_string();
@@ -579,7 +715,9 @@ fn format_markdown(digest: &Digest) -> String {
     output.push_str("| Language | Lines |\n");
     output.push_str("|----------|-------|\n");
 
-    let mut languages: Vec<(String, usize)> = digest.language_breakdown.iter()
+    let mut languages: Vec<(String, usize)> = digest
+        .language_breakdown
+        .iter()
         .map(|(k, v)| (k.clone(), *v))
         .collect();
     languages.sort_by(|a, b| b.1.cmp(&a.1));
@@ -662,9 +800,9 @@ fn is_godot_project(project_path: &Path) -> bool {
     let mut builder = WalkBuilder::new(project_path);
     builder
         .hidden(false)
-        .git_ignore(true)  // Always respect .gitignore for detection
+        .git_ignore(true) // Always respect .gitignore for detection
         .max_depth(Some(3)); // Only check a few levels deep for performance
-    
+
     let walker = builder.build();
 
     for result in walker {
@@ -687,10 +825,68 @@ fn is_godot_project(project_path: &Path) -> bool {
 
 // Helper function to check if a file extension is a common code file
 fn is_common_code_file(ext: &str) -> bool {
-    matches!(ext, 
-        "rs" | "js" | "ts" | "py" | "java" | "go" | "c" | "cpp" | "h" | "hpp" | 
-        "rb" | "php" | "cs" | "html" | "css" | "json" | "md" | "yml" | "yaml" | 
-        "toml" | "gd" | "tscn" | "tres" | "shader"
+    matches!(
+        ext,
+        "rs" | "js"
+            | "ts"
+            | "py"
+            | "java"
+            | "go"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "rb"
+            | "php"
+            | "cs"
+            | "html"
+            | "css"
+            | "json"
+            | "md"
+            | "yml"
+            | "yaml"
+            | "toml"
+            | "gd"
+            | "tscn"
+            | "tres"
+            | "shader"
     )
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_should_ignore_patterns() {
+        let test_cases = vec![
+            // Path, Pattern, Expected Result
+            ("src/test/file.rs", "**/test/**", true),
+            ("src/main.rs", "**/test/**", false),
+            ("README.md", "README.md", true),
+            ("docs/README.md", "README.md", true),
+            ("src/lib/README.md", "README.md", true),
+            ("src/readme.txt", "README.md", false),
+            ("test/file.rs", "test/", true),
+            ("src/test/file.rs", "test/", true),
+            ("testing/file.rs", "test/", false),
+            ("src/file.test.rs", "*.test.*", true),
+            ("src/file.rs", "*.test.*", false),
+        ];
+
+        for (path_str, pattern_str, expected) in test_cases {
+            let path = PathBuf::from(path_str);
+            let mut patterns = HashSet::new();
+            patterns.insert(pattern_str.to_string());
+
+            assert_eq!(
+                should_ignore(&path, &patterns),
+                expected,
+                "Failed for path '{}' with pattern '{}'",
+                path_str,
+                pattern_str
+            );
+        }
+    }
+}
