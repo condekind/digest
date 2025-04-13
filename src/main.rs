@@ -58,10 +58,10 @@ struct Cli {
 }
 
 #[derive(Serialize, Debug)]
-struct FileInfo {
-    path: String,
-    language: Option<String>,
-    content: String,
+pub struct FileInfo {
+    pub path: String,
+    pub language: Option<String>,
+    pub content: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -309,7 +309,7 @@ fn build_ignore_patterns(
     patterns
 }
 
-fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
+pub fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
     let digestignore_path = project_path.join(".digestignore");
 
     if !digestignore_path.exists() {
@@ -343,7 +343,7 @@ fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
     Ok(patterns)
 }
 
-fn check_for_gitignore(project_path: &Path) -> Result<HashSet<String>> {
+pub fn check_for_gitignore(project_path: &Path) -> Result<HashSet<String>> {
     let gitignore_path = project_path.join(".gitignore");
 
     if !gitignore_path.exists() {
@@ -370,7 +370,7 @@ fn check_for_gitignore(project_path: &Path) -> Result<HashSet<String>> {
     Ok(patterns)
 }
 
-fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
+pub fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
     // Get the path as a string
     let path_str = path.to_string_lossy();
 
@@ -530,7 +530,7 @@ fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
     false
 }
 
-fn collect_relevant_files(
+pub fn collect_relevant_files(
     project_path: &Path,
     ignore_patterns: &HashSet<String>,
     max_files: usize,
