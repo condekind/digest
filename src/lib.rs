@@ -1,9 +1,9 @@
 // Re-export the main module functions for testing
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Serialize, Debug)]
 pub struct FileInfo {
@@ -32,8 +32,19 @@ pub fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
         if pattern == "**/test*/**" {
             // This should match paths containing test, tests, testing, etc. as directories
             let path_segments: Vec<&str> = path_str.split('/').collect();
-            for segment in &path_segments {
+            for (i, segment) in path_segments.iter().enumerate() {
+                // Only match if it's a directory (not a file) and starts with "test"
                 if !segment.is_empty() && segment.starts_with("test") {
+                    // Since **/test*/** requires a segment that starts with test
+                    // followed by at least one more segment,
+                    // don't match files like "test_file.js" that are at the end of the path
+                    if i == path_segments.len() - 1 {
+                        // If it's the last segment, it's a file, not a directory
+                        // Unless the path ends with a slash
+                        if !path_str.ends_with('/') {
+                            continue;
+                        }
+                    }
                     return true;
                 }
             }
