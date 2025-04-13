@@ -449,41 +449,63 @@ fn test_directory_structure_generator() -> Result<()> {
     for (i, (gitignore, digestignore, expected_included, expected_excluded)) in
         test_cases.iter().enumerate()
     {
+        println!("\n--- Running test case {} ---", i);
+
         // Set up the ignore files
         create_gitignore(root, &gitignore.iter().map(|s| *s).collect::<Vec<_>>())?;
         create_digestignore(root, &digestignore.iter().map(|s| *s).collect::<Vec<_>>())?;
+
+        println!("gitignore patterns: {:?}", gitignore);
+        println!("digestignore patterns: {:?}", digestignore);
 
         // Build the ignore patterns set
         let mut ignore_patterns = HashSet::new();
 
         // Add patterns from both files
-        if let Ok(patterns) = check_for_digestignore(root) {
-            ignore_patterns.extend(patterns);
+        if let Ok(digestignore_patterns) = check_for_digestignore(root) {
+            println!(
+                "Loaded patterns from digestignore: {:?}",
+                digestignore_patterns
+            );
+            ignore_patterns.extend(digestignore_patterns);
         }
 
-        if let Ok(patterns) = check_for_gitignore(root) {
-            ignore_patterns.extend(patterns);
+        if let Ok(gitignore_patterns) = check_for_gitignore(root) {
+            println!("Loaded patterns from gitignore: {:?}", gitignore_patterns);
+            ignore_patterns.extend(gitignore_patterns);
         }
+
+        println!("Combined patterns: {:?}", ignore_patterns);
 
         // Check each expected included file
         for path in expected_included {
             let full_path = root.join(path);
+            let is_ignored = should_ignore(&full_path, &ignore_patterns);
+            println!(
+                "Testing path: {} - should NOT be ignored, actual: {}",
+                path, is_ignored
+            );
+
             assert!(
-                !should_ignore(&full_path, &ignore_patterns),
+                !is_ignored,
                 "Test case {}: Expected {} to be included but it was ignored",
-                i,
-                path
+                i, path
             );
         }
 
         // Check each expected excluded file
         for path in expected_excluded {
             let full_path = root.join(path);
+            let is_ignored = should_ignore(&full_path, &ignore_patterns);
+            println!(
+                "Testing path: {} - should be ignored, actual: {}",
+                path, is_ignored
+            );
+
             assert!(
-                should_ignore(&full_path, &ignore_patterns),
+                is_ignored,
                 "Test case {}: Expected {} to be excluded but it was included",
-                i,
-                path
+                i, path
             );
         }
     }
