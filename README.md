@@ -51,7 +51,7 @@ digest --output project-digest.md
 
 - `<PROJECT_PATH>`: Path to the project directory (defaults to current directory)
 - `-m, --max-files <MAX_FILES>`: Maximum number of files to include (default: 50)
-- `-s, --max-file-size <MAX_FILE_SIZE>`: Maximum file size in KB (default: 100)
+- `-s, --max-file-size <MAX_FILE_SIZE>`: Maximum file size in KB (default: 500)
 - `-f, --format <FORMAT>`: Output format: 'markdown' or 'json' (default: markdown)
 - `-o, --output <OUTPUT>`: Output file (defaults to stdout)
 
@@ -66,3 +66,4 @@ The Markdown output includes:
 ## License
 
 MIT 
+

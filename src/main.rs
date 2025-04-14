@@ -58,10 +58,10 @@ struct Cli {
 }
 
 #[derive(Serialize, Debug)]
-struct FileInfo {
-    path: String,
-    language: Option<String>,
-    content: String,
+pub struct FileInfo {
+    pub path: String,
+    pub language: Option<String>,
+    pub content: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -88,6 +88,12 @@ fn main() -> Result<()> {
     let is_godot_project = is_godot_project(&project_path);
     if is_godot_project {
         info!("Detected Godot project");
+    }
+
+    // Check if it's a Lua project
+    let is_lua_project = is_lua_project(&project_path);
+    if is_lua_project {
+        info!("Detected Lua project");
     }
 
     // Step 1: Determine the predominant language
@@ -235,7 +241,7 @@ fn get_main_language(language_breakdown: &HashMap<String, usize>) -> Option<Stri
         .map(|(lang, _)| lang.clone())
 }
 
-fn build_ignore_patterns(
+pub fn build_ignore_patterns(
     main_language: &Option<String>,
     is_godot_project: bool,
 ) -> HashSet<String> {
@@ -286,6 +292,10 @@ fn build_ignore_patterns(
                 patterns.insert("vendor".to_string());
                 patterns.insert("*.pb.go".to_string());
             }
+            "Lua" => {
+                patterns.insert("*.luac".to_string()); // Compiled Lua files
+                patterns.insert("luarocks".to_string()); // LuaRocks package manager directory
+            }
             "C#" => {
                 // If it's not a Godot project, use default C# ignores
                 if !is_godot_project {
@@ -309,7 +319,7 @@ fn build_ignore_patterns(
     patterns
 }
 
-fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
+pub fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
     let digestignore_path = project_path.join(".digestignore");
 
     if !digestignore_path.exists() {
@@ -343,7 +353,7 @@ fn check_for_digestignore(project_path: &Path) -> Result<HashSet<String>> {
     Ok(patterns)
 }
 
-fn check_for_gitignore(project_path: &Path) -> Result<HashSet<String>> {
+pub fn check_for_gitignore(project_path: &Path) -> Result<HashSet<String>> {
     let gitignore_path = project_path.join(".gitignore");
 
     if !gitignore_path.exists() {
@@ -370,7 +380,7 @@ fn check_for_gitignore(project_path: &Path) -> Result<HashSet<String>> {
     Ok(patterns)
 }
 
-fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
+pub fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
     // Get the path as a string
     let path_str = path.to_string_lossy();
 
@@ -530,7 +540,7 @@ fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
     false
 }
 
-fn collect_relevant_files(
+pub fn collect_relevant_files(
     project_path: &Path,
     ignore_patterns: &HashSet<String>,
     max_files: usize,
@@ -636,6 +646,7 @@ fn collect_relevant_files(
                     "c" | "cpp" | "h" | "hpp" => "C/C++",
                     "rb" => "Ruby",
                     "php" => "PHP",
+                    "lua" => "Lua",
                     "cs" => {
                         if is_godot_project {
                             "GDScript C#"
@@ -745,6 +756,7 @@ fn format_markdown(digest: &Digest) -> String {
                 "C/C++" => "cpp",
                 "Ruby" => "ruby",
                 "PHP" => "php",
+                "Lua" => "lua",
                 "C#" => "csharp",
                 "GDScript C#" => "csharp",
                 "HTML" => "html",
@@ -782,7 +794,7 @@ impl PathToStringExt for Path {
 }
 
 // Function to detect if a project is a Godot project
-fn is_godot_project(project_path: &Path) -> bool {
+pub fn is_godot_project(project_path: &Path) -> bool {
     // Check for project.godot file, which is the main project file for Godot projects
     let project_godot_path = project_path.join("project.godot");
     if project_godot_path.exists() {
@@ -846,11 +858,54 @@ fn is_common_code_file(ext: &str) -> bool {
             | "yml"
             | "yaml"
             | "toml"
+            | "lua"
             | "gd"
             | "tscn"
             | "tres"
             | "shader"
     )
+}
+
+// Function to detect if a project is a Lua project
+pub fn is_lua_project(project_path: &Path) -> bool {
+    // Common Lua project files
+    let lua_files = ["init.lua", "main.lua", "conf.lua", "config.lua"];
+    for file in lua_files.iter() {
+        if project_path.join(file).exists() {
+            return true;
+        }
+    }
+
+    // Look for a concentration of Lua files in the project
+    let mut builder = WalkBuilder::new(project_path);
+    builder
+        .hidden(false)
+        .git_ignore(true) // Always respect .gitignore for detection
+        .max_depth(Some(3)); // Only check a few levels deep for performance
+
+    let walker = builder.build();
+
+    let mut lua_file_count = 0;
+    for result in walker {
+        if let Ok(entry) = result {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    if let Some(ext_str) = ext.to_str() {
+                        if ext_str == "lua" {
+                            lua_file_count += 1;
+                            if lua_file_count >= 5 {
+                                // If we find at least 5 Lua files, consider it a Lua project
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
