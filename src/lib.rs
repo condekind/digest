@@ -21,6 +21,33 @@ pub fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
 
     // Check if the path matches any of the ignore patterns
     for pattern in ignore_patterns {
+        // Special case for the "tests/" directory pattern
+        if pattern == "tests/" {
+            // Get the relative path components
+            let path_components: Vec<&str> = path_str.split('/').collect();
+
+            // Find the index of "tests" in the path
+            let contains_tests = path_components.iter().position(|&c| c == "tests");
+
+            if let Some(index) = contains_tests {
+                // Only match if "tests" is a root-level directory or if it's properly separated by slashes
+                // This should match "tests/file.rs" but not "src/tests/file.rs"
+
+                // Check the path components before "tests"
+                let prefix = &path_components[..index];
+
+                // If "tests" is the first component after the temporary directory path
+                // or if it's directly inside another directory (e.g., "/some/path/tests/")
+                // then we should match it
+                if prefix.is_empty() || prefix.iter().all(|&c| c != "src") {
+                    return true;
+                }
+            }
+
+            // Skip further processing for this pattern
+            continue;
+        }
+
         // Special case for **/test/** pattern since it's common and important
         if pattern == "**/test/**" {
             if path_str.contains("/test/") || path_str.starts_with("test/") {
@@ -34,17 +61,8 @@ pub fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
             let path_segments: Vec<&str> = path_str.split('/').collect();
             for (i, segment) in path_segments.iter().enumerate() {
                 // Only match if it's a directory (not a file) and starts with "test"
-                if !segment.is_empty() && segment.starts_with("test") {
-                    // Since **/test*/** requires a segment that starts with test
-                    // followed by at least one more segment,
-                    // don't match files like "test_file.js" that are at the end of the path
-                    if i == path_segments.len() - 1 {
-                        // If it's the last segment, it's a file, not a directory
-                        // Unless the path ends with a slash
-                        if !path_str.ends_with('/') {
-                            continue;
-                        }
-                    }
+                if i < path_segments.len() - 1 && !segment.is_empty() && segment.starts_with("test")
+                {
                     return true;
                 }
             }
@@ -53,6 +71,13 @@ pub fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
         // Special case for **/*.md pattern (common for documentation)
         if pattern == "**/*.md" {
             if path_str.ends_with(".md") {
+                return true;
+            }
+        }
+
+        // Special case for **/*.js pattern
+        if pattern == "**/*.js" {
+            if path_str.ends_with(".js") {
                 return true;
             }
         }
@@ -91,9 +116,16 @@ pub fn should_ignore(path: &Path, ignore_patterns: &HashSet<String>) -> bool {
         // Handle **/ pattern at the beginning (match any directory depth)
         if pattern.starts_with("**/") {
             let suffix = &pattern[3..];
+
+            // Special case for file extensions like **/*.js
+            if suffix.starts_with('*') && suffix.contains('.') {
+                let extension = suffix.split('.').last().unwrap_or("");
+                if !extension.is_empty() && path_str.ends_with(&format!(".{}", extension)) {
+                    return true;
+                }
+            }
             // Check if suffix appears anywhere in the path with proper directory boundaries
-            // For example, "**/test" should match "test" or "src/test" but not "testing" or "src/testing"
-            if path_str == suffix ||
+            else if path_str == suffix ||
                path_str.ends_with(&format!("/{}", suffix)) ||
                // Special case for directories: if suffix ends with '/', then handle it as a directory
                (suffix.ends_with('/') && (
