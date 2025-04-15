@@ -1,8 +1,7 @@
 use anyhow::Result;
-use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::fs::{self};
+use std::path::Path;
 use tempfile::TempDir;
 
 use digest::{check_for_digestignore, check_for_gitignore, should_ignore};
@@ -89,18 +88,10 @@ pub fn run_ignore_pattern_tests(
         // Create new ignore files if needed
         if !test.gitignore_patterns.is_empty() {
             create_gitignore(root, &test.gitignore_patterns)?;
-            println!(
-                "Created .gitignore with patterns: {:?}",
-                test.gitignore_patterns
-            );
         }
 
         if !test.digestignore_patterns.is_empty() {
             create_digestignore(root, &test.digestignore_patterns)?;
-            println!(
-                "Created .digestignore with patterns: {:?}",
-                test.digestignore_patterns
-            );
         }
 
         // Build the ignore patterns set
@@ -108,85 +99,32 @@ pub fn run_ignore_pattern_tests(
 
         // Add patterns from both files
         if let Ok(patterns) = check_for_digestignore(root) {
-            println!("Loaded patterns from digestignore: {:?}", patterns);
             ignore_patterns.extend(patterns);
         }
 
         if let Ok(patterns) = check_for_gitignore(root) {
-            println!("Loaded patterns from gitignore: {:?}", patterns);
             ignore_patterns.extend(patterns);
         }
-
-        println!("Combined patterns: {:?}", ignore_patterns);
 
         // Check each expected included file
         for path in &test.expected_included {
             let full_path = root.join(path);
-            let is_ignored = should_ignore(&full_path, &ignore_patterns);
-            println!(
-                "Checking expected included path: {} - is_ignored: {}",
-                path, is_ignored
-            );
-
-            if is_ignored {
-                // Print debugging info to see which pattern is causing the issue
-                for pattern in &ignore_patterns {
-                    if pattern.contains("tests") || pattern.contains("test") {
-                        println!("  Potential pattern issue: '{}'", pattern);
-                    }
-                }
-            }
-
             assert!(
-                !is_ignored,
+                !should_ignore(&full_path, &ignore_patterns),
                 "Test case {}: Expected {} to be included but it was ignored",
-                i, path
+                i,
+                path
             );
         }
 
         // Check each expected excluded file
         for path in &test.expected_excluded {
             let full_path = root.join(path);
-            let is_ignored = should_ignore(&full_path, &ignore_patterns);
-            println!(
-                "Checking expected excluded path: {} - is_ignored: {}",
-                path, is_ignored
-            );
-
-            // Special debugging for tests/integration/mod.rs
-            if path == "tests/integration/mod.rs" && !is_ignored {
-                println!("\n=== SPECIAL DEBUG FOR tests/integration/mod.rs ===");
-
-                // Test the pattern manually
-                let mut test_patterns = HashSet::new();
-                test_patterns.insert("tests/".to_string());
-
-                let manual_result = should_ignore(&full_path, &test_patterns);
-                println!("Manual test with just 'tests/' pattern: {}", manual_result);
-
-                println!("Path as string: '{}'", full_path.to_string_lossy());
-                println!(
-                    "Starts with 'tests/': {}",
-                    full_path.to_string_lossy().starts_with("tests/")
-                );
-
-                println!("=== END SPECIAL DEBUG ===\n");
-            }
-
-            if !is_ignored {
-                // Print debugging info to see which pattern we expected to match
-                println!("  Failed to match: '{}' with patterns:", path);
-                for pattern in &ignore_patterns {
-                    if pattern.contains("tests") || path.contains("tests") {
-                        println!("  - Pattern: '{}'", pattern);
-                    }
-                }
-            }
-
             assert!(
-                is_ignored,
+                should_ignore(&full_path, &ignore_patterns),
                 "Test case {}: Expected {} to be excluded but it was included",
-                i, path
+                i,
+                path
             );
         }
     }

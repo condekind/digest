@@ -6,7 +6,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 // Test implementation of is_lua_project that matches the one in main.rs
-fn is_lua_project_impl(project_path: &Path) -> bool {
+pub fn is_lua_project_impl(project_path: &Path) -> bool {
     // Common Lua project files
     let lua_files = ["init.lua", "main.lua", "conf.lua", "config.lua"];
     for file in lua_files.iter() {
